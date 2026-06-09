@@ -1,0 +1,475 @@
+Sub MakeTeacherList(listWs As Worksheet, teacherList As Object)
+    Dim r As Long
+    Dim tName As String
+    
+    r = 1
+    Do While listWs.Cells(r, 1).Value <> ""
+        tName = Trim(listWs.Cells(r, 1).Value)
+        If tName <> "" Then teacherList(tName) = r
+        r = r + 1
+    Loop
+    
+End Sub
+Function ReadScheduleData( _
+    ws As Worksheet, _
+    teacherList As Object, _
+    data As Object, _
+    priorityMap As Object, _
+    komaCount() As Long, _
+    maxkoma As Long, _
+    ByRef firstkoma As Integer, _
+    ByRef outDate As String, _
+    startRow As Long, _
+    startCol As Long) As Boolean
+    
+    Dim lastRow As Long
+    Dim currentkoma As String, komaNum As Long
+    Dim i As Long, k As Long
+    Dim line As String, cleanLine As String
+    Dim parts As Variant
+    Dim teacher As String
+    Dim errorMsg As String, errorOutRow As Long
+    Dim hasError As Boolean
+    Dim answer As VbMsgBoxResult
+    Dim savedkomas As String
+    
+    errorOutRow = 1
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    currentkoma = ""
+    hasError = False
+    errorMsg = ""
+    
+    For i = 1 To lastRow
+        line = Trim(ws.Cells(i, 1).Value)
+        If line = "" Then GoTo NextLine
+        
+        ' ストッパー：配置表セクションが終わったら終了
+        If InStr(line, "ブース状況") > 0 Then Exit For
+        
+        
+        ' コマ数の取得（「6コマ目」から「6」を抽出）
+        If InStr(line, "コマ目") > 0 Then
+            currentkoma = Mid(line, InStr(line, "コマ目") - 1, 1)
+            
+            '最初のコマを取得
+            If firstkoma = 0 Then
+                firstkoma = Val(currentkoma)
+            End If
+            
+            '日付取得
+            If outDate = "" Then
+                outDate = Left(line, 13)
+            End If
+            
+        
+        ' 講師データの蓄積
+        ElseIf Left(line, 2) = "予定" Then
+            ' 名寄せ：全角スペース・タブを半角1つに統合
+            cleanLine = Replace(Replace(line, "　", " "), vbTab, " ")
+            Do While InStr(cleanLine, "  ") > 0: cleanLine = Replace(cleanLine, "  ", " "): Loop
+            
+            parts = Split(Trim(cleanLine), " ")
+            
+            
+            If UBound(parts) >= 2 Then
+                ' クリーニングして結合
+                teacher = Trim(WorksheetFunction.Clean(parts(1) & " " & parts(2)))
+                
+                If (parts(3) <> "担当") And (parts(3) <> "臨時") And (parts(3) <> "代行") Then
+                    errorMsg = errorMsg & "未配置：( 行：" & i & " - " & currentkoma & "コマ目 )" & vbCrLf
+                    hasError = True
+                    ws.Cells(errorOutRow, "T").Value = line
+                    errorOutRow = errorOutRow + 1
+                    GoTo NextLine
+                End If
+            
+                If Not teacherList.exists(teacher) Then
+                    errorMsg = errorMsg & "名簿未登録： " & teacher & " ( 行：" & i & " ) " & vbCrLf
+                    hasError = True
+                    ws.Cells(errorOutRow, "T").Value = line
+                    errorOutRow = errorOutRow + 1
+                    ' 名簿にない場合は不正講師として記録（不要行の誤認防止）
+                    ' ※明らかに講師名でない場合はスルーするガードが必要ならここに追加
+                ElseIf currentkoma <> "" Then
+                    komaNum = Val(currentkoma)
+                    If Not data.exists(teacher) Then
+                        priorityMap(teacher) = False
+                        
+                        data(teacher) = currentkoma
+                        
+                        If komaNum >= 1 And komaNum <= maxkoma Then
+                            komaCount(komaNum) = komaCount(komaNum) + 1
+                        End If
+                    Else
+                        savedkomas = data(teacher)
+                    
+                    ' 同じコマの二重登録を防止
+                        If InStr("," & savedkomas & ",", "," & currentkoma & ",") = 0 Then
+                            data(teacher) = savedkomas & "," & currentkoma
+                            
+                            If komaNum >= 1 And komaNum <= maxkoma Then
+                                komaCount(komaNum) = komaCount(komaNum) + 1
+                            End If
+                        End If
+                    End If
+                    
+                    '5階優先条件を入れる
+                    If InStr(line, "体験") > 0 Then
+                        priorityMap(teacher) = True
+                    End If
+                    
+                End If
+            End If
+        End If
+NextLine:
+    Next i
+    
+    For k = 1 To maxkoma
+        ws.Cells(startRow - 2, startCol - 1 + k).Value = komaCount(k)
+    Next k
+    
+    If hasError Then
+        answer = MsgBox("以下のデータが適切ではありません。配置を続行しますか？" & vbCrLf & vbCrLf & _
+                        errorMsg, vbYesNo + vbExclamation, "データ未完")
+        
+        ' 「いいえ」を選んだらプログラムを終了
+        If answer = vbNo Then
+            MsgBox "処理を中断しました。データを修正してください。"
+            ReadScheduleData = False
+            Exit Function
+        End If
+    End If
+
+    ReadScheduleData = True
+    
+End Function
+Function CheckUseOnlyUnder(outDate As String, komaCount() As Long, maxkoma As Long, useUnderSeatNum As Long) As Boolean
+    Dim isSaturday As Boolean
+    Dim isAllkomaUnder As Boolean
+    Dim k As Integer
+    
+    isSaturday = (InStr(outDate, "土") > 0)
+    isAllkomaUnder = True
+    
+    For k = 1 To maxkoma
+        If komaCount(k) > useUnderSeatNum Then
+            isAllkomaUnder = False
+            Exit For
+        End If
+    Next k
+    
+    If isSaturday And isAllkomaUnder Then
+        CheckUseOnlyUnder = True
+    Else
+        CheckUseOnlyUnder = False
+    End If
+    
+End Function
+Function CheckSeatOverflow(komaCount() As Long, maxkoma As Long, seatCount As Long) As Boolean
+    Dim k As Integer
+    
+    For k = 1 To maxkoma
+        If komaCount(k) > seatCount Then
+            MsgBox k & "コマ目の人数(" & komaCount(k) & ")が配置可能な座席数(" & seatCount & ")を超えています。", _
+                    vbCritical, "キャパオーバー"
+            CheckSeatOverflow = False
+            Exit Function
+        End If
+    Next k
+    
+    CheckSeatOverflow = True
+    
+End Function
+Function CheckLongStreak(data As Object) As Boolean
+    Dim key As Variant
+    Dim komaArray As Variant
+    Dim k As Long
+    Dim currentStreak As Long, maxStreak As Long
+    Dim longStreakMsg As String
+    Dim currentData As Variant
+    Dim answer As VbMsgBoxResult
+    longStreakMsg = ""
+    
+    For Each key In data.keys
+        komaArray = Split(data(key), ",")
+        
+        ' 連続数のカウント
+        currentStreak = 1
+        maxStreak = 1
+        If UBound(komaArray) > 0 Then
+            For k = 1 To UBound(komaArray)
+                If Val(komaArray(k)) = Val(komaArray(k - 1)) + 1 Then
+                    currentStreak = currentStreak + 1
+                Else
+                    currentStreak = 1
+                End If
+                If currentStreak > maxStreak Then maxStreak = currentStreak
+            Next k
+        End If
+        
+        ' 5コマ以上の人をリストアップ
+        If maxStreak >= 5 Then
+            longStreakMsg = longStreakMsg & "・" & key & " (" & maxStreak & "コマ連続)" & vbCrLf
+        End If
+    Next key
+
+    ' メッセージの表示と分岐
+    If longStreakMsg <> "" Then
+        answer = MsgBox("以下の講師が5コマ以上連続で出勤しています。配置を続行しますか？" & vbCrLf & vbCrLf & _
+                        longStreakMsg, vbYesNo + vbExclamation, "連続出勤警告")
+        
+        ' 「いいえ」を選んだらプログラムを終了
+        If answer = vbNo Then
+            MsgBox "処理を中断しました。データを修正してください。"
+            CheckLongStreak = False
+            Exit Function
+        End If
+    End If
+    
+    CheckLongStreak = True
+    
+End Function
+Sub AssignFixedSeats(ws As Worksheet, data As Object, seatMap As Object, startRow As Long, startCol As Long, seatCount As Long)
+    Dim r As Long, k As Long
+    Dim tName As String
+    Dim targetSeatNum As Long
+    Dim komaArray As Variant
+    Dim seatRow As Long
+    Dim foundRow As Long
+    
+    For r = 2 To 50
+        tName = Trim(ws.Cells(r, startCol - 2).Value)
+        If tName <> "" And data.exists(tName) Then
+            targetSeatNum = Val(ws.Cells(r, startCol - 3).Value)
+            komaArray = Split(data(tName), ",")
+            
+            ' G列から該当する座席番号の行を探す
+            foundRow = 0
+            For seatRow = startRow To startRow + seatCount - 1
+                If Val(ws.Cells(seatRow, startCol - 1).Value) = targetSeatNum Then
+                    foundRow = seatRow
+                    Exit For
+                End If
+            Next seatRow
+            
+            If foundRow > 0 Then
+                ' 指定席に書き込み
+                For k = LBound(komaArray) To UBound(komaArray)
+                    ws.Cells(foundRow, startCol - 1 + Val(komaArray(k))).Value = tName
+                Next k
+                seatMap(tName) = targetSeatNum
+                data.Remove tName ' 通常割当から除外
+            End If
+        End If
+    Next r
+End Sub
+Sub Preventinglone(ws As Worksheet, firstkoma As Integer, preventlonekoma As Integer, data As Object, priorityMap As Object, seatMap As Object, startRow As Long, startCol As Long, seatCount As Long)
+    Dim key As Variant
+    Dim k As Long
+    Dim haskomabeforelimit As Boolean
+    Dim kNum As Integer
+    Dim komaArray As Variant
+    Dim teacher As String
+    
+    If firstkoma < 5 Then
+        preventlonekoma = 3
+    End If
+    
+    For Each key In data.keys
+        teacher = CStr(key)
+        
+        If Not priorityMap(teacher) Then
+            komaArray = Split(data(teacher), ",")
+            haskomabeforelimit = False
+            
+            For k = LBound(komaArray) To UBound(komaArray)
+                kNum = Val(komaArray(k))
+                If kNum >= firstkoma And kNum < preventlonekoma Then
+                    haskomabeforelimit = True
+                    Exit For
+                End If
+            Next k
+            
+            If haskomabeforelimit Then
+                priorityMap(teacher) = True
+            End If
+        End If
+    Next key
+End Sub
+Function SortTeachersByKomaCount(data As Object, teacherList As Object) As Variant
+    Dim keys As Variant
+    Dim i As Long, j As Long
+    Dim iCount As Long, jCount As Long
+    Dim iIdx As Long, jIdx As Long
+    Dim tmp As Variant
+    Dim shouldSwap As Boolean
+    
+    keys = data.keys
+    
+    If UBound(keys) < 0 Then
+        SortTeachersByKomaCount = keys
+        Exit Function
+    End If
+    
+    For i = LBound(keys) To UBound(keys) - 1
+        For j = i + 1 To UBound(keys)
+            
+            iCount = UBound(Split(data(keys(i)), ",")) + 1
+            jCount = UBound(Split(data(keys(j)), ",")) + 1
+            
+            iIdx = teacherList(keys(i))
+            jIdx = teacherList(keys(j))
+            
+            shouldSwap = False
+            
+            If iCount < jCount Then
+                shouldSwap = True
+            ElseIf iCount = jCount Then
+                If iIdx < jIdx Then
+                    shouldSwap = True
+                End If
+            End If
+            
+            If shouldSwap Then
+                tmp = keys(i): keys(i) = keys(j): keys(j) = tmp
+            End If
+        Next j
+    Next i
+    
+    SortTeachersByKomaCount = keys
+    
+End Function
+Sub AssignNormalSeats(ws As Worksheet, data As Object, teacherList As Object, seatMap As Object, priorityMap As Object, _
+                       startRow As Long, startCol As Long, seatCount As Long, UseOnlyUnder As Boolean)
+    Dim keys As Variant
+    Dim i As Long, j As Long, k As Long
+    Dim teacher As String
+    Dim komaArray As Variant
+    Dim assigned As Boolean, canSit As Boolean
+    Dim seatRow As Long
+    Dim currentSeatNum As Long
+    
+    keys = SortTeachersByKomaCount(data, teacherList)
+    Dim debugIdx As Long
+    For debugIdx = LBound(keys) To UBound(keys)
+        Debug.Print (debugIdx + 1) & "位: " & keys(debugIdx) & " ? " & data(keys(debugIdx))
+    Next debugIdx
+    
+    If UBound(keys) < 0 Then Exit Sub
+
+    ' --- 実際の座席配置処理 ---
+    For i = LBound(keys) To UBound(keys)
+        teacher = CStr(keys(i))
+        Debug.Print teacher
+        komaArray = Split(data(teacher), ",")
+        'currentData = Split(data(teacher), "|")
+        'komasString = currentData(0)
+        'flagString = currentData(1)
+        'komaArray = Split(komasString, ",")
+        assigned = False
+        
+        ' G列の並びに沿って空き席を探す
+        For seatRow = startRow To startRow + seatCount - 1
+            currentSeatNum = Val(ws.Cells(seatRow, startCol - 1).Value)
+            
+            ' 土曜日かつ少人数の制限がかかっている場合、18番より大きい席はスキップ
+            If UseOnlyUnder And currentSeatNum > 18 Then GoTo NextSeat
+            If priorityMap(teacher) And currentSeatNum > 18 Then GoTo NextSeat
+            
+            ' コマの空き状況チェック
+            canSit = True
+            For k = LBound(komaArray) To UBound(komaArray)
+                If ws.Cells(seatRow, startCol - 1 + Val(komaArray(k))).Value <> "" Then
+                    canSit = False
+                    Exit For
+                End If
+            Next k
+            
+            ' 空いていれば講師名をセルに書き込む
+            If canSit Then
+                For k = LBound(komaArray) To UBound(komaArray)
+                    ws.Cells(seatRow, startCol - 1 + Val(komaArray(k))).Value = teacher
+                Next k
+                seatMap(teacher) = currentSeatNum
+                assigned = True
+                Exit For
+            End If
+NextSeat:
+        Next seatRow
+        
+        ' どこにも座れなかった場合の未配置エラー
+        If Not assigned Then
+            MsgBox teacher & " を配置可能な席がありませんでした。パズルを中断します。", vbCritical, "配置失敗"
+            Exit Sub
+        Else
+            data.Remove teacher
+        End If
+    Next i
+End Sub
+Sub ExportSeatLayout(ws As Worksheet, seatWs As Worksheet, _
+                     startRow As Long, startCol As Long, seatCount As Long, maxkoma As Long)
+    Dim uniqueTeachers As Object
+    Dim seatRow As Long, k As Long
+    Dim seatNum As Long
+    Dim cVal As String
+    Dim outR As Long, outC As Long
+    
+    ' 重複排除用のディクショナリを作成
+    Set uniqueTeachers = CreateObject("Scripting.Dictionary")
+    
+    ' 各座席の行をループ
+    For seatRow = startRow To startRow + seatCount - 1
+        seatNum = Val(ws.Cells(seatRow, startCol - 1).Value)
+        uniqueTeachers.RemoveAll ' 次の座席の調査のために一回空っぽにする
+        
+        ' その座席の全コマをスキャンして、座る講師名を回収
+        For k = 0 To maxkoma - 1
+            cVal = ws.Cells(seatRow, startCol + k).Value
+            If cVal <> "" Then uniqueTeachers(cVal) = True
+        Next k
+        
+        ' その座席に1人でも講師が配置されていた場合
+        If uniqueTeachers.Count > 0 Then
+            ' 座席番号に応じて、出力先のセル位置（行・列）を計算
+            If seatNum <= 16 Then
+                outR = 1 + (seatNum - 1) * 5
+                outC = 2
+            Else
+                outR = 1 + (seatNum - 17) * 5
+                outC = 4
+            End If
+            
+            ' 複数の講師がいる場合は改行で繋いで、計算したセルへ出力
+            seatWs.Cells(outR, outC).Value = Join(uniqueTeachers.keys, vbLf)
+        End If
+    Next seatRow
+End Sub
+Function createsLongStreak_NoSort(komaArray As Variant, addkoma As Integer) As Boolean
+    Dim temp() As Integer
+    Dim i As Long
+    
+    ReDim temp(0 To UBound(komaArray) + 1)
+    
+    For i = 0 To UBound(komaArray)
+        temp(i) = Val(komaArray(i))
+    Next i
+    
+    temp(UBound(temp)) = addkoma
+    
+    Dim streak As Integer
+    streak = 1
+    
+    For i = 1 To UBound(temp)
+        If temp(i) = temp(i - 1) + 1 Then
+            streak = streak + 1
+            If streak >= 5 Then
+                createsLongStreak_NoSort = True
+                Exit Function
+            End If
+        ElseIf temp(i) <> temp(i - 1) Then
+            streak = 1
+        End If
+    Next i
+    
+    createsLongStreak_NoSort = False
+End Function

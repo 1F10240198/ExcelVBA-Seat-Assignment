@@ -1,0 +1,85 @@
+Sub swap_seat()
+    Dim ws As Worksheet: Set ws = ActiveSheet
+    Dim fromNum As Long, toNum As Long
+    Dim fromTeacher As String, toTeacher As String
+    Dim fromR As Long, fromC As Long
+    Dim toR As Long, toC As Long
+    
+    ' 1. 入力値の取得
+    fromNum = Val(ws.Range("F1").Value)
+    toNum = Val(ws.Range("G1").Value)
+    
+    If fromNum = 0 Or toNum = 0 Then
+        MsgBox "入れ替える座席番号をX1とY1に正しく入力してください。"
+        Exit Sub
+    End If
+    
+    ' 2. 入れ替え元(from)の座標計算と名前取得
+    If fromNum <= 16 Then
+        fromR = 1 + (fromNum - 1) * 5: fromC = 2
+    Else
+        fromR = 1 + (fromNum - 17) * 5: fromC = 4
+    End If
+    fromTeacher = ws.Cells(fromR, fromC).Value
+    
+    ' 3. 入れ替え先(to)の座標計算と名前取得
+    If toNum <= 16 Then
+        toR = 1 + (toNum - 1) * 5: toC = 2
+    Else
+        toR = 1 + (toNum - 17) * 5: toC = 4
+    End If
+    toTeacher = ws.Cells(toR, toC).Value
+    
+    ' 4. 値の入れ替え実行
+    ws.Cells(fromR, fromC).Value = toTeacher
+    ws.Cells(toR, toC).Value = fromTeacher
+    
+    MsgBox "座席 " & fromNum & " と " & toNum & " を入れ替えました。"
+End Sub
+
+Sub paste()
+    Dim cb As Object
+    Dim clipText As String
+    Dim lines() As String
+    Dim i As Long
+    Dim targetRow As Long
+    
+    Range("A:A").ClearContents
+    ' クリップボードオブジェクトの作成
+    Set cb = CreateObject("New:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
+    
+    ' クリップボードからテキストを取得
+    On Error Resume Next
+    cb.GetFromClipboard
+    clipText = cb.GetText
+    On Error GoTo 0
+    
+    ' クリップボードが空の場合は終了
+    If clipText = "" Then
+        MsgBox "クリップボードが空です。", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 1. タブを半角スペースに置換
+    clipText = Replace(clipText, vbTab, " ")
+    
+    ' 2. 改行（CRLF, LF, CR）で分割して配列に格納
+    ' 念のため異なる改行コードを統一してから分割
+    clipText = Replace(clipText, vbCrLf, vbLf)
+    clipText = Replace(clipText, vbCr, vbLf)
+    lines = Split(clipText, vbLf)
+    
+    ' 3. A列に書き込み（現在はA1セルから順番に貼り付け）
+    targetRow = 1
+    Application.ScreenUpdating = False ' 高速化
+    
+    For i = LBound(lines) To UBound(lines)
+        ' 空行を除外したい場合は If Trim(lines(i)) <> "" Then を追加
+        Cells(targetRow, 1).Value = lines(i)
+        targetRow = targetRow + 1
+    Next i
+    
+    Application.ScreenUpdating = True
+    
+    MsgBox "貼り付けが完了しました。"
+End Sub

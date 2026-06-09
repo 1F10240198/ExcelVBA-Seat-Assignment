@@ -1,0 +1,77 @@
+
+Sub done()
+    ' --- 1. 変数宣言 ---
+    Dim ws As Worksheet, listWs As Worksheet, seatWs As Worksheet
+    Dim teacherList As Object, data As Object, fixedSeat As Object, seatMap As Object, priorityMap As Object
+    Dim startRow As Long, startCol As Long, seatCount As Long, maxkoma As Long
+    Dim komaCount() As Long
+    Dim outDate As String: outDate = ""
+    Dim firstkoma As Integer
+    firstkoma = 0
+    
+    ' --- 2. 初期設定 ---
+    Set ws = ActiveSheet
+    Set listWs = Worksheets("講師名簿")
+    Set seatWs = Worksheets("座席表")
+    
+    startRow = 3: startCol = 9: seatCount = 31: maxkoma = 8
+    ReDim komaCount(1 To maxkoma)
+    
+    Set teacherList = CreateObject("Scripting.Dictionary")
+    Set data = CreateObject("Scripting.Dictionary")
+    Set fixedSeat = CreateObject("Scripting.Dictionary")
+    Set seatMap = CreateObject("Scripting.Dictionary")
+    Set priorityMap = CreateObject("Scripting.Dictionary")
+    
+    ws.Columns("T").ClearContents
+    ws.Range(ws.Cells(startRow, startCol), ws.Cells(startRow + seatCount - 1, startCol + maxkoma - 1)).ClearContents
+    seatWs.Columns(2).ClearContents: seatWs.Columns(4).ClearContents
+    
+    ' --- 3. 講師名簿の読み込み（名寄せのためTrim徹底） ---
+    Call MakeTeacherList(listWs, teacherList)
+    
+    'Dim debugkey As Variant
+    'For Each debugkey In data.keys
+        'Debug.Print debugkey & " : " & data(debugkey)
+    'Next debugkey
+    
+    ' --- 4. データ読み取り（ストッパー & 重複排除） ---
+    If Not ReadScheduleData(ws, teacherList, data, priorityMap, komaCount, maxkoma, firstkoma, outDate, startRow, startCol) Then Exit Sub
+    
+    'Dim debugkey As Variant
+    'For Each debugkey In data.keys
+        'Debug.Print debugkey & " : " & data(debugkey)
+    'Next debugkey
+    '---- 5. 土曜日判定
+    Dim UseOnlyUnder As Boolean
+    Dim useUnderSeatNum As Long
+    useUnderSeatNum = 12
+    
+    UseOnlyUnder = CheckUseOnlyUnder(outDate, komaCount, maxkoma, useUnderSeatNum)
+    
+    ' --- 6. 人数過剰チェック & シートクリア ---
+    If Not CheckSeatOverflow(komaCount, maxkoma, seatCount) Then Exit Sub
+    
+    ' --- 7. 5コマ以上連続出勤チェック ---
+    If Not CheckLongStreak(data) Then Exit Sub
+    
+    ' --- 8. 指定席の配置（優先処理） ---
+    Call AssignFixedSeats(ws, data, seatMap, startRow, startCol, seatCount)
+    
+    ' --- 9. 5コマの孤独防止(講習期間中は1.2コマ孤独防止)
+    Dim preventlonekoma As Integer
+    preventlonekoma = 6
+    
+    Call Preventinglone(ws, firstkoma, preventlonekoma, data, priorityMap, seatMap, startRow, startCol, seatCount)
+    
+    ' --- 10. 通常割当（ソート後の配置） ---
+    Call AssignNormalSeats(ws, data, teacherList, seatMap, priorityMap, startRow, startCol, seatCount, UseOnlyUnder)
+    
+    ' --- 11. 座席表シートへの出力 ---
+    Call ExportSeatLayout(ws, seatWs, startRow, startCol, seatCount, maxkoma)
+    
+    
+    MsgBox "すべての配置が完了しました。"
+    ws.Range("S1").Value = outDate
+End Sub
+
