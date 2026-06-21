@@ -1,0 +1,182 @@
+Sub check()
+    Dim ws As Worksheet, listWs As Worksheet
+    Dim teacherList As Object, data As Object
+    Dim startRow As Long, startCol As Long, seatCount As Long, maxkoma As Long
+    Dim komaCount() As Variant
+    Dim outDate As String
+    Dim currentkoma As String
+    Dim teacher As String, line As String, cleanLine As String
+    Dim parts As Variant, savedkomas As String
+    Dim komaNum As Long
+    Dim errorOutRow As Long
+    Dim daycount As Long
+    Dim non_regi As Boolean, mihai As Boolean
+    
+    ' --- 2. 初期設定 ---
+    Set ws = ActiveSheet
+    Set listWs = Worksheets("講師名簿")
+    
+    startRow = 3: startCol = 9: seatCount = 31: maxkoma = 8
+    ReDim komaCount(1 To maxkoma)
+    
+    Set teacherList = CreateObject("Scripting.Dictionary")
+    Set data = CreateObject("Scripting.Dictionary")
+    
+    ws.Columns("T").ClearContents
+    ws.Columns("X").ClearContents
+    ws.Columns("Y").ClearContents
+    
+    currentkoma = ""
+    errorOutRow = 1
+    daycount = 0
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    non_regi = False
+    mihai = False
+    
+    ' ---
+    Call MakeTeacherList(listWs, teacherList)
+    
+    ' ---
+    For i = 1 To lastRow
+        line = Trim(ws.Cells(i, 1).Value)
+        If line = "" Then GoTo NextLine
+        
+        If InStr(line, "コマ目") > 0 Then
+            currentkoma = Mid(line, InStr(line, "コマ目") - 1, 1)
+            
+            If outDate = "" Then
+                outDate = Left(line, 13)
+            End If
+            
+            If IsDate(Left(line, 10)) And Left(line, 13) <> outDate Then
+                outDate = Left(line, 13)
+                Call ExportTable(ws, data, komaCount, non_regi, mihai, outDate, daycount, seatCount)
+                
+                non_regi = False
+                mihai = False
+                
+                data.RemoveAll
+                Erase komaCount
+                ReDim komaCount(1 To maxkoma)
+                
+            End If
+            
+        ElseIf Left(line, 2) = "予定" Then
+            cleanLine = Replace(Replace(line, "　", " "), vbTab, " ")
+            Do While InStr(cleanLine, "  ") > 0: cleanLine = Replace(cleanLine, "  ", " "): Loop
+            
+            parts = Split(Trim(cleanLine), " ")
+            
+            If UBound(parts) >= 2 Then
+                teacher = Trim(WorksheetFunction.Clean(parts(1) & " " & parts(2)))
+                
+                If (parts(3) <> "担当") And (parts(3) <> "臨時") And (parts(3) <> "代行") Then
+                    ws.Cells(errorOutRow, "T").Value = outDate & line
+                    errorOutRow = errorOutRow + 1
+                    mihai = True
+                    GoTo NextLine
+                End If
+                
+                If Not teacherList.exists(teacher) Then
+                    ws.Cells(errorOutRow, "T").Value = outDate & line
+                    errorOutRow = errorOutRow + 1
+                    non_regi = True
+                
+                ElseIf currentkoma <> "" Then
+                    komaNum = Val(currentkoma)
+                    If Not data.exists(teacher) Then
+                        data(teacher) = currentkoma
+                        
+                        If komaNum >= 1 And komaNum <= maxkoma Then
+                            komaCount(komaNum) = komaCount(komaNum) + 1
+                        End If
+                    Else
+                        savedkomas = data(teacher)
+                        
+                        If InStr("," & savedkomas & ",", "," & currentkoma & ",") = 0 Then
+                            data(teacher) = savedkomas & "," & currentkoma
+                            
+                            If komaNum >= 1 And komaNum <= maxkoma Then
+                                komaCount(komaNum) = komaCount(komaNum) + 1
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+NextLine:
+    Next i
+    
+    Call ExportTable(ws, data, komaCount, non_regi, mihai, outDate, daycount, seatCount)
+    
+End Sub
+Sub ExportTable(ws As Worksheet, data As Object, komaCount As Variant, non_regi As Boolean, _
+                mihai As Boolean, outDate As String, ByRef daycount As Long, seatCount As Long)
+    
+    Dim k As Long, overflow As Boolean
+    overflow = False
+    Dim maxkoma As Long
+    maxkoma = 8
+    
+    For k = 1 To maxkoma
+        If komaCount(k) > seatCount Then
+            overflow = True
+        End If
+    Next k
+    
+    Dim key As Variant, komaArray As Variant, currentStreak As Long, maxStreak As Long
+    Dim longStreakMsg As String
+    longStreakMsg = ""
+    
+    For Each key In data.keys
+        komaArray = Split(data(key), ",")
+        currentStreak = 1
+        maxStreak = 1
+        
+        If UBound(komaArray) > 0 Then
+            For k = 1 To UBound(komaArray)
+                If Val(komaArray(k)) = Val(komaArray(k - 1)) + 1 Then
+                    currentStreak = currentStreak + 1
+                ElseIf Val(komaArray(k)) <> Val(komaArray(k - 1)) Then
+                    currentStreak = 1
+                End If
+                If currentStreak > maxStreak Then maxStreak = currentStreak
+            Next k
+        End If
+        
+        If maxStreak >= 5 Then
+            If longStreakMsg = "" Then
+                longStreakMsg = longStreakMsg & key & "(" & maxStreak & "コマ連続)"
+            Else
+                longStreakMsg = "," & longStreakMsg & key & "(" & maxStreak & "コマ連続)"
+            End If
+        End If
+    Next key
+    
+    Dim baseRow As Long
+    baseRow = 15 + (daycount * 6)
+    
+    With ws.Range(ws.Cells(baseRow, "X"), ws.Cells(baseRow, "Z"))
+        .Interior.Color = RGB(220, 230, 242)
+        .Font.Bold = True ' ついでに文字を太字にしたい場合はここを有効にしてください
+    End With
+    
+    ws.Cells(baseRow, "X").Value = "日付"
+    ws.Cells(baseRow, "Y").Value = outDate
+    
+    ws.Cells(baseRow + 1, "X").Value = "座席不足"
+    ws.Cells(baseRow + 1, "Y").Value = IIf(overflow, "あり", "なし")
+    
+    ws.Cells(baseRow + 2, "X").Value = "講師未登録"
+    ws.Cells(baseRow + 2, "Y").Value = IIf(non_regi, "あり", "なし")
+    
+    ws.Cells(baseRow + 3, "X").Value = "未配置"
+    ws.Cells(baseRow + 3, "Y").Value = IIf(mihai, "あり", "なし")
+    
+    ws.Cells(baseRow + 4, "X").Value = "連続出勤"
+    ws.Cells(baseRow + 4, "Y").Value = IIf(longStreakMsg = "", "なし", longStreakMsg)
+    
+    daycount = daycount + 1
+    
+End Sub
+
